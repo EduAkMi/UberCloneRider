@@ -6,8 +6,6 @@ import android.location.Location;
 import android.os.Bundle;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
-import android.support.design.widget.FloatingActionButton;
-import android.support.design.widget.Snackbar;
 import android.support.v4.app.ActivityCompat;
 import android.util.Log;
 import android.view.View;
@@ -50,12 +48,22 @@ import com.google.firebase.database.DatabaseError;
 import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
 import com.google.firebase.database.ValueEventListener;
+import com.google.firebase.iid.FirebaseInstanceId;
+import com.google.gson.Gson;
 
 import java.util.Arrays;
 
+import retrofit2.Call;
+import retrofit2.Callback;
+import retrofit2.Response;
 import theron.uberclonerider.Common.Common;
 import theron.uberclonerider.Helper.CustomInfoWindow;
+import theron.uberclonerider.Model.FCMResponse;
+import theron.uberclonerider.Model.Notification;
 import theron.uberclonerider.Model.Rider;
+import theron.uberclonerider.Model.Sender;
+import theron.uberclonerider.Model.Token;
+import theron.uberclonerider.Remote.IFCMService;
 
 public class HomeActivity extends AppCompatActivity
         implements NavigationView.OnNavigationItemSelectedListener,
@@ -98,12 +106,17 @@ public class HomeActivity extends AppCompatActivity
     int distance = 1; //3km
     private static final int LIMIT = 3;
 
+    //Send Alert
+    IFCMService mService;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_home);
         Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
+
+        mService = Common.getFCMService();
 
         DrawerLayout drawer = (DrawerLayout) findViewById(R.id.drawer_layout);
         ActionBarDrawerToggle toggle = new ActionBarDrawerToggle(
@@ -141,11 +154,64 @@ public class HomeActivity extends AppCompatActivity
         btnPickupRequest.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                requestPickupHere(FirebaseAuth.getInstance().getCurrentUser().getUid());
+                if (!isDriverFound) {
+                    requestPickupHere(FirebaseAuth.getInstance().getCurrentUser().getUid());
+                } else
+                    sendRequestToDriver(driverId);
             }
         });
 
         setUpLocation();
+
+        updateFirebaseToken();
+    }
+
+    private void updateFirebaseToken() {
+        FirebaseDatabase db = FirebaseDatabase.getInstance();
+        DatabaseReference tokens = db.getReference(Common.token_tbl);
+
+        Token token = new Token(FirebaseInstanceId.getInstance().getToken());
+        tokens.child(FirebaseAuth.getInstance().getCurrentUser().getUid()).setValue(token);
+    }
+
+    private void sendRequestToDriver(String driverId) {
+        DatabaseReference tokens = FirebaseDatabase.getInstance().getReference(Common.token_tbl);
+        tokens.orderByKey().equalTo(driverId)
+                .addListenerForSingleValueEvent(new ValueEventListener() {
+                    @Override
+                    public void onDataChange(@NonNull DataSnapshot dataSnapshot) {
+                        for (DataSnapshot postSnapshot : dataSnapshot.getChildren()) {
+                            Token token = postSnapshot.getValue(Token.class);
+
+                            //Make raw payload - convert LatLng to json
+                            String json_lat_lng = new Gson().toJson(new LatLng(mLastLocation.getLatitude(), mLastLocation.getLongitude()));
+
+                            Notification data = new Notification("Uber Clone", json_lat_lng); //Send it to Driver app and we will deserialize it again
+                            Sender content = new Sender(token.getToken(), data); //Send this data to token
+
+                            mService.sendMessage(content)
+                                    .enqueue(new Callback<FCMResponse>() {
+                                        @Override
+                                        public void onResponse(Call<FCMResponse> call, Response<FCMResponse> response) {
+                                            if (response.body().success == 1)
+                                                Toast.makeText(HomeActivity.this, "Requeset sent!", Toast.LENGTH_SHORT).show();
+                                            else
+                                                Toast.makeText(HomeActivity.this, "Request failed!", Toast.LENGTH_SHORT).show();
+                                        }
+
+                                        @Override
+                                        public void onFailure(Call<FCMResponse> call, Throwable t) {
+                                            Log.e("ERROR", t.getMessage());
+                                        }
+                                    });
+                        }
+                    }
+
+                    @Override
+                    public void onCancelled(@NonNull DatabaseError databaseError) {
+
+                    }
+                });
     }
 
     private void requestPickupHere(String uid) {
@@ -283,7 +349,7 @@ public class HomeActivity extends AppCompatActivity
                                         .position(new LatLng(location.latitude, location.longitude))
                                         .flat(true)
                                         .title(rider.getName())
-                                        .snippet("Phone: " +rider.getPhone())
+                                        .snippet("Phone: " + rider.getPhone())
                                         .icon(BitmapDescriptorFactory.fromResource(R.drawable.car)));
                             }
 
