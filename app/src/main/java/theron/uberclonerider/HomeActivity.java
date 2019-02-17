@@ -185,8 +185,9 @@ public class HomeActivity extends AppCompatActivity
 
                             //Make raw payload - convert LatLng to json
                             String json_lat_lng = new Gson().toJson(new LatLng(mLastLocation.getLatitude(), mLastLocation.getLongitude()));
+                            String riderToken = FirebaseInstanceId.getInstance().getToken();
 
-                            Notification data = new Notification("Uber Clone", json_lat_lng); //Send it to Driver app and we will deserialize it again
+                            Notification data = new Notification(riderToken, json_lat_lng); //Send it to Driver app and we will deserialize it again
                             Sender content = new Sender(token.getToken(), data); //Send this data to token
 
                             mService.sendMessage(content)
